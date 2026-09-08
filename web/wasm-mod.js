@@ -1,5 +1,7 @@
 import { bootstrap } from "./rustradio-ui-bootstrap.js";
 
+await (globalThis.coiReady ?? Promise.resolve());
+
 await bootstrap({
   pkgName: "rf_survey_wasm",
   wasmMemoryConfig: {

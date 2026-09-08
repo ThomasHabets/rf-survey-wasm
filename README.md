@@ -26,6 +26,22 @@ Open `http://localhost:8000` in a Chromium-family browser. WebUSB requires a
 secure context (localhost or HTTPS), and the shared-memory worker requires the
 cross-origin isolation headers supplied by `serve.py`.
 
+## GitHub Pages
+
+`build-pages.sh` creates a deployable `dist/` directory. The Pages workflow
+builds and deploys it after pushes to `main`, or when started manually. The
+deployed site uses a same-origin service worker to add the COOP/COEP headers
+that GitHub Pages cannot configure directly.
+
+Configure the repository's Pages source as **GitHub Actions**. Until the local
+path patches can be replaced by published crates, the workflow expects the
+compatible `main` branches of `ThomasHabets/rustradio` and
+`ThomasHabets/uhd-pure` to be available on GitHub.
+
+The workflow downloads only the official B200 firmware and FPGA image during
+the build; those files and the patched dependency sources are not vendored in
+this repository.
+
 If the B200 is initially in its FX3 bootloader, the first click loads firmware.
 After it re-enumerates, click **Connect & start** again and choose the B200's
 firmware-backed identity.
