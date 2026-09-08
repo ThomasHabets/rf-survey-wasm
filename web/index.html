@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WebUSB RF Survey</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="survey-app">
+    <header class="survey-header">
+      <div>
+        <p class="eyebrow">RustRadio WASM · WebUSB</p>
+        <h1>Broadband RF survey</h1>
+        <p class="lede">Sweep a USB 3 USRP B200 and compare cumulative average and peak power.</p>
+      </div>
+      <div class="primary-actions">
+        <button id="button-start" class="primary" disabled>Connect &amp; start</button>
+        <button id="button-stop" disabled>Stop after sweep</button>
+      </div>
+    </header>
+
+    <section class="panel controls" aria-label="Survey controls">
+      <label>
+        <span>Start frequency (MHz)</span>
+        <input id="input-start-frequency" type="number" min="70" max="6000" step="any" value="5150" required>
+      </label>
+      <label>
+        <span>Stop frequency (MHz)</span>
+        <input id="input-stop-frequency" type="number" min="70" max="6000" step="any" value="5895" required>
+      </label>
+      <label>
+        <span>Sample rate (MS/s)</span>
+        <input id="input-sample-rate" type="number" min="0.03125" max="16" step="any" value="8" required>
+      </label>
+      <label>
+        <span>Gain (dB)</span>
+        <input id="input-gain" type="number" min="0" max="76" step="1" value="30" required>
+      </label>
+      <label>
+        <span>Dwell per center (ms)</span>
+        <input id="input-dwell" type="number" min="0.001" step="any" value="200" required>
+      </label>
+      <label>
+        <span>Settle after retune (ms)</span>
+        <input id="input-settle" type="number" min="0" step="any" value="70" required>
+      </label>
+      <label>
+        <span>FFT size</span>
+        <input id="input-fft-size" type="number" min="1" step="1" value="4096" required>
+      </label>
+      <details class="advanced">
+        <summary>Advanced tuning</summary>
+        <div class="advanced-grid">
+          <label>
+            <span>Maximum step (MHz, blank = 80%)</span>
+            <input id="input-step" type="number" min="0" step="any" placeholder="automatic">
+          </label>
+          <label>
+            <span>LO offset (MHz, blank = automatic)</span>
+            <input id="input-lo-offset" type="number" step="any" placeholder="automatic">
+          </label>
+          <label class="checkbox">
+            <input id="input-fixed-lo" type="checkbox">
+            <span>Keep the same signed LO offset every sweep</span>
+          </label>
+        </div>
+      </details>
+    </section>
+
+    <section class="status-panel" aria-live="polite">
+      <span class="status-label">Status</span>
+      <span id="survey-status">Starting the processing worker…</span>
+    </section>
+
+    <section class="plots" aria-label="Survey results">
+      <section id="plot-db">Loading dB plot…</section>
+      <section id="plot-linear">Loading linear-power plot…</section>
+    </section>
+
+    <section class="panel downloads" aria-label="Downloads">
+      <div>
+        <h2>Download the latest complete result</h2>
+        <p>Downloads stay disabled until the first full sweep is rendered.</p>
+      </div>
+      <div class="download-actions">
+        <button id="button-download-data" disabled>Summary data</button>
+        <button id="button-download-db" disabled>dB PNG</button>
+        <button id="button-download-linear" disabled>Linear PNG</button>
+      </div>
+    </section>
+
+    <section class="panel log-panel" aria-label="Application log">
+      <h2>Log</h2>
+      <pre id="log-output">Awaiting logs…</pre>
+    </section>
+  </main>
+  <script type="module" src="wasm-mod.js"></script>
+</body>
+</html>

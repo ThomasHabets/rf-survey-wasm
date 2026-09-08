@@ -1,0 +1,48 @@
+[package]
+name = "rf-survey-wasm"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+authors = ["Thomas Habets <thomas@habets.se>"]
+repository = "https://github.com/ThomasHabets/rf-survey-wasm"
+description = "WebUSB WASM RF survey tool for the USRP B200"
+
+[dependencies]
+async-channel = { version = "2.5.0", default-features = false }
+console_error_panic_hook = "0.1.7"
+futures-timer = { version = "3.0", features = ["wasm-bindgen"] }
+js-sys = "0.3.102"
+log = "0.4.33"
+rustfft = "6.4.1"
+rustradio = { version = "0.18.2", features = ["wasm", "fast-math", "simd"] }
+rustradio-ui = "0.1.22"
+serde = { version = "1.0.228", features = ["derive"] }
+uhd-pure = { version = "0.1.4", features = ["wasm"] }
+wasm-bindgen = "0.2.125"
+wasm-bindgen-futures = "0.4.75"
+web-sys = { version = "0.3.102", features = [
+    "Blob",
+    "BlobPropertyBag",
+    "Document",
+    "Element",
+    "Event",
+    "HtmlAnchorElement",
+    "HtmlButtonElement",
+    "HtmlElement",
+    "HtmlInputElement",
+    "Node",
+    "Response",
+    "Url",
+    "Window",
+] }
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[patch.crates-io]
+rustradio = { path = "../rustradio" }
+rustradio-ui = { path = "../rustradio/rustradio-ui" }
+uhd-pure = { path = "../uhd-pure" }
+
+[package.metadata.wasm-pack.profile.profiling]
+wasm-opt = ["-O", "-g"]
