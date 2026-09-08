@@ -21,14 +21,6 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      # Cargo.toml deliberately uses sibling path patches while the required
-      # uhd-pure and rustradio-ui releases are under development.
-      - name: Check out patched dependencies
-        run: |
-          set -euo pipefail
-          git clone --depth 1 https://github.com/ThomasHabets/rustradio "$GITHUB_WORKSPACE/../rustradio"
-          git clone --depth 1 https://github.com/ThomasHabets/uhd-pure "$GITHUB_WORKSPACE/../uhd-pure"
-
       - uses: dtolnay/rust-toolchain@nightly
         with:
           targets: wasm32-unknown-unknown

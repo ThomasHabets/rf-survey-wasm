@@ -41,8 +41,6 @@ crate-type = ["cdylib", "rlib"]
 
 [patch.crates-io]
 rustradio = { path = "../rustradio" }
-rustradio-ui = { path = "../rustradio/rustradio-ui" }
-uhd-pure = { path = "../uhd-pure" }
 
 [package.metadata.wasm-pack.profile.profiling]
 wasm-opt = ["-O", "-g"]

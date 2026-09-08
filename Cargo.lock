@@ -613,6 +613,8 @@ dependencies = [
 [[package]]
 name = "rustradio-ui"
 version = "0.1.22"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eff730d18f0d299c925e0179221fa2d5fa91299f392194657e0d169744aae1c9"
 dependencies = [
  "async-channel",
  "js-sys",
@@ -843,6 +845,8 @@ checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 [[package]]
 name = "uhd-pure"
 version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a90b9ffbcf8f97b22d14a405746ed026c574f870aa4d069578fb781f09679fe4"
 dependencies = [
  "futures-lite",
  "futures-timer",
