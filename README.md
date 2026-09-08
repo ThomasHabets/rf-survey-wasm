@@ -36,6 +36,12 @@ The live graphs show cumulative per-frequency average and maximum PSD. The LO
 offset alternates between sweeps by default so that, once both paths have data,
 receiver images can be rejected in the same way as native `rf-survey`.
 
+Each dwell is buffered while USB reception is active. The B200 stream is then
+stopped before the samples are handed to the FFT worker, preventing worker
+backpressure from overflowing the device. A discontinuous dwell is discarded
+and retried; after every ten consecutive failures reception pauses for one
+second before retrying the same band.
+
 After the first complete sweep, the page can download both plot canvases as PNG
 and a native-compatible summary text file:
 

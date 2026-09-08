@@ -44,6 +44,8 @@ const B200_FPGA_IMAGE: &str = "usrp_b200_fpga.bin";
 const B200_REENUMERATION_DELAY: Duration = Duration::from_secs(1);
 const SAMPLE_BATCH_SIZE: usize = 65_536;
 const MAX_DWELL_ATTEMPTS: usize = 300;
+const DWELL_FAILURES_PER_COOLDOWN: usize = 10;
+const OVERLOAD_COOLDOWN: Duration = Duration::from_secs(1);
 const WORKER_FAILURE_ACK: u64 = u64::MAX;
 
 thread_local! {
@@ -369,7 +371,6 @@ async fn capture_band(
             tune.actual_rf_frequency_hz / 1e6,
             tune.actual_dsp_frequency_hz / 1e6,
         );
-        receiver.start().await.map_err(display_error)?;
         send_message(MainToWorker::ApplicationSpecific(
             SurveyCommand::BeginDwell {
                 band_index,
@@ -378,10 +379,23 @@ async fn capture_band(
         ))
         .await
         .map_err(display_error)?;
+        if let Err(error) = receiver.start().await {
+            send_message(MainToWorker::ApplicationSpecific(
+                SurveyCommand::CancelDwell,
+            ))
+            .await
+            .map_err(display_error)?;
+            return Err(display_error(error));
+        }
 
         let mut seen = 0usize;
+        // Never await worker backpressure during the receive interval. These
+        // batches live in shared WASM memory and are handed to the FFT worker
+        // only after the B200 stream has stopped.
+        let mut batches = Vec::new();
         let mut batch = Vec::with_capacity(SAMPLE_BATCH_SIZE);
         let mut discontinuity = None;
+        let mut fatal_receive_error = None;
         while seen < settings.dwell_samples {
             let packet = match receiver.receive().await {
                 Ok(packet) => packet,
@@ -392,7 +406,10 @@ async fn capture_band(
                     discontinuity = Some(error.to_string());
                     break;
                 }
-                Err(error) => return Err(display_error(error)),
+                Err(error) => {
+                    fatal_receive_error = Some(error);
+                    break;
+                }
             };
             let available = (settings.dwell_samples - seen).min(packet.samples.len());
             let packet_start = seen;
@@ -406,14 +423,26 @@ async fn capture_band(
                         .map(|sample| Complex::new(sample.re, sample.im)),
                 );
                 if batch.len() >= SAMPLE_BATCH_SIZE {
-                    send_sample_batch(std::mem::take(&mut batch)).await?;
+                    batches.push(std::mem::take(&mut batch));
                     batch = Vec::with_capacity(SAMPLE_BATCH_SIZE);
                 }
             }
             seen = packet_end;
         }
+        // Do this before sending samples to the FFT worker. In particular,
+        // receive() restarts the stream after a device FIFO overflow.
+        receiver.stop().await.map_err(display_error)?;
 
+        if let Some(error) = fatal_receive_error {
+            send_message(MainToWorker::ApplicationSpecific(
+                SurveyCommand::CancelDwell,
+            ))
+            .await
+            .map_err(display_error)?;
+            return Err(display_error(error));
+        }
         if let Some(reason) = discontinuity {
+            batches.clear();
             batch.clear();
             send_message(MainToWorker::ApplicationSpecific(
                 SurveyCommand::CancelDwell,
@@ -423,9 +452,28 @@ async fn capture_band(
             warn!(
                 "Band {band_index} receive discontinuity on attempt {attempt}/{MAX_DWELL_ATTEMPTS}: {reason}"
             );
+            if should_cool_down(attempt) && attempt < MAX_DWELL_ATTEMPTS {
+                warn!(
+                    "Pausing reception for {} second after {attempt} consecutive failed dwells",
+                    OVERLOAD_COOLDOWN.as_secs()
+                );
+                set_status(&format!(
+                    "Band {} paused for {} second after {attempt} consecutive receive failures…",
+                    band_index + 1,
+                    OVERLOAD_COOLDOWN.as_secs(),
+                ))?;
+                Delay::new(OVERLOAD_COOLDOWN).await;
+                set_status(&format!(
+                    "Retrying sweep band {} after overload cooldown…",
+                    band_index + 1
+                ))?;
+            }
             continue;
         }
         if !batch.is_empty() {
+            batches.push(batch);
+        }
+        for batch in batches {
             send_sample_batch(batch).await?;
         }
         send_message(MainToWorker::ApplicationSpecific(SurveyCommand::EndDwell))
@@ -436,6 +484,10 @@ async fn capture_band(
     Err(js_error(&format!(
         "band {band_index} failed after {MAX_DWELL_ATTEMPTS} receive attempts"
     )))
+}
+
+fn should_cool_down(consecutive_failures: usize) -> bool {
+    consecutive_failures > 0 && consecutive_failures.is_multiple_of(DWELL_FAILURES_PER_COOLDOWN)
 }
 
 async fn send_sample_batch(samples: Vec<Complex>) -> Result<(), JsValue> {
@@ -922,5 +974,15 @@ mod tests {
             text,
             "# frequency_hz average_power_dbfs_per_hz maximum_power_dbfs_per_hz observations\n100000000.000000 -100.000000000 -90.000000000 1\n"
         );
+    }
+
+    #[test]
+    fn overload_cooldown_repeats_every_ten_failed_dwells() {
+        for failures in 1..DWELL_FAILURES_PER_COOLDOWN {
+            assert!(!should_cool_down(failures));
+        }
+        assert!(should_cool_down(DWELL_FAILURES_PER_COOLDOWN));
+        assert!(!should_cool_down(DWELL_FAILURES_PER_COOLDOWN + 1));
+        assert!(should_cool_down(DWELL_FAILURES_PER_COOLDOWN * 2));
     }
 }
