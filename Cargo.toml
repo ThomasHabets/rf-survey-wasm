@@ -13,7 +13,7 @@ console_error_panic_hook = "0.1.7"
 futures-timer = { version = "3.0", features = ["wasm-bindgen"] }
 js-sys = "0.3.102"
 log = "0.4.33"
-rustfft = "6.4.1"
+rustfft = { version = "6.4.1", features = ["wasm_simd"] }
 rustradio = { version = "0.18.2", features = ["wasm", "fast-math", "simd"] }
 rustradio-ui = "0.1.23"
 serde = { version = "1.0.228", features = ["derive"] }
