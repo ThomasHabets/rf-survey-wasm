@@ -52,6 +52,10 @@ The live graphs show cumulative per-frequency average and maximum PSD. The LO
 offset alternates between sweeps by default so that, once both paths have data,
 receiver images can be rejected in the same way as native `rf-survey`.
 
+Use the sun/moon button in the top-right corner to switch between light and dark
+mode. The page and both canvas graphs redraw immediately, including while a
+survey is running.
+
 Each dwell is buffered while USB reception is active. The B200 stream is then
 stopped before the samples are handed to the FFT worker, preventing worker
 backpressure from overflowing the device. A discontinuous dwell is discarded

@@ -6,7 +6,7 @@ use futures_timer::Delay;
 use log::{info, warn};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{JsFuture, spawn_local};
-use web_sys::{Blob, BlobPropertyBag, HtmlAnchorElement, Response, Url};
+use web_sys::{Blob, BlobPropertyBag, Event, HtmlAnchorElement, Response, Url};
 
 use rustradio::Complex;
 use rustradio_ui::TaggedVec;
@@ -36,6 +36,7 @@ const ID_FFT_SIZE: &str = "input-fft-size";
 const ID_GAIN: &str = "input-gain";
 const ID_LO_OFFSET: &str = "input-lo-offset";
 const ID_FIXED_LO: &str = "input-fixed-lo";
+const ID_THEME_TOGGLE: &str = "button-theme-toggle";
 const ID_DB_PLOT: &str = "plot-db";
 const ID_LINEAR_PLOT: &str = "plot-linear";
 
@@ -277,6 +278,66 @@ fn handle_stop() -> Result<(), JsValue> {
     STOP_REQUESTED.with(|stop| stop.set(true));
     get_button(ID_STOP)?.set_disabled(true);
     set_status("Stop requested; finishing the current sweep…")
+}
+
+fn handle_theme_toggle() -> Result<(), JsValue> {
+    let dark = !current_theme_is_dark()?;
+    apply_theme_override(dark)?;
+    with_plot(&DB_PLOT, |plot| plot.redraw())?;
+    with_plot(&LINEAR_PLOT, |plot| plot.redraw())?;
+    Ok(())
+}
+
+fn current_theme_is_dark() -> Result<bool, JsValue> {
+    let document = web_sys::window()
+        .ok_or_else(|| js_error("no browser window"))?
+        .document()
+        .ok_or_else(|| js_error("no browser document"))?;
+    let root = document
+        .document_element()
+        .ok_or_else(|| js_error("document has no root element"))?;
+    let classes = root.class_list();
+    if classes.contains("rr-theme-dark") {
+        return Ok(true);
+    }
+    if classes.contains("rr-theme-light") {
+        return Ok(false);
+    }
+    Ok(web_sys::window()
+        .ok_or_else(|| js_error("no browser window"))?
+        .match_media("(prefers-color-scheme: dark)")?
+        .is_some_and(|media| media.matches()))
+}
+
+fn apply_theme_override(dark: bool) -> Result<(), JsValue> {
+    let document = web_sys::window()
+        .ok_or_else(|| js_error("no browser window"))?
+        .document()
+        .ok_or_else(|| js_error("no browser document"))?;
+    let root = document
+        .document_element()
+        .ok_or_else(|| js_error("document has no root element"))?;
+    let classes = root.class_list();
+    classes.remove_2("rr-theme-light", "rr-theme-dark")?;
+    classes.add_1(if dark {
+        "rr-theme-dark"
+    } else {
+        "rr-theme-light"
+    })?;
+    update_theme_button(dark)
+}
+
+fn update_theme_button(dark: bool) -> Result<(), JsValue> {
+    let button = get_button(ID_THEME_TOGGLE)?;
+    let (label, icon) = if dark {
+        ("Switch to light mode", "☀")
+    } else {
+        ("Switch to dark mode", "☾")
+    };
+    button.set_attribute("aria-label", label)?;
+    button.set_attribute("title", label)?;
+    button.set_text_content(Some(icon));
+    Ok(())
 }
 
 async fn run_survey(
@@ -852,6 +913,17 @@ fn js_error(message: &str) -> JsValue {
 }
 
 pub(crate) async fn setup() -> Result<(), JsValue> {
+    update_theme_button(current_theme_is_dark()?)?;
+    {
+        let handler = Closure::<dyn FnMut(Event)>::new(|_| {
+            if let Err(error) = handle_theme_toggle() {
+                warn!("Theme change failed: {error:?}");
+            }
+        });
+        get_button(ID_THEME_TOGGLE)?
+            .add_event_listener_with_callback("click", handler.as_ref().unchecked_ref())?;
+        handler.forget();
+    }
     {
         let handler = Closure::<dyn FnMut() -> Result<(), JsValue>>::new(handle_start);
         get_button(ID_START)?
