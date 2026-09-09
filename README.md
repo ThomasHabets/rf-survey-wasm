@@ -7,6 +7,8 @@ plots after every complete sweep.
 
 Live demo at <https://rf-survey.habets.se/>.
 
+This is mostly LLM coded, as an example application using RustRadio.
+
 ## Build
 
 Install `wasm-pack`, `jq`, and the UHD images package, then run:
