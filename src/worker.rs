@@ -1,24 +1,17 @@
-use std::cell::RefCell;
 use std::sync::Arc;
 
-use async_channel::Receiver;
-use log::{error, info, trace};
 use rustfft::FftPlanner;
 use wasm_bindgen::prelude::*;
-use wasm_bindgen_futures::spawn_local;
 
 use rustradio::Complex;
 use rustradio::window::WindowType;
-use rustradio_ui::AppEmpty;
 
-use crate::model::{SummaryPoint, SurveySummary, WorkerConfig, bin_offset, shifted_indices};
-use crate::{MainToWorker, SurveyCommand, SurveyEvent, WorkerToMain};
-
-pub(crate) const SAMPLE_STREAM: &str = "survey-samples";
-
-thread_local! {
-    static STATE: RefCell<Option<SurveyWorker>> = const { RefCell::new(None) };
-}
+#[cfg(test)]
+use crate::model::SurveySummary;
+use crate::model::{
+    PlotData, SummaryPoint, WorkerConfig, bin_offset, linear_to_db, shifted_indices,
+};
+use rustradio_ui::mainthread::xy_sink::{XyEnvelope, XyEnvelopeSeries};
 
 struct SpectrumAverager {
     sample_rate_hz: f64,
@@ -28,12 +21,13 @@ struct SpectrumAverager {
     fft: Arc<dyn rustfft::Fft<f32>>,
     frame: Vec<Complex>,
     work: Vec<Complex>,
+    scratch: Vec<Complex>,
     power_sum: Vec<f64>,
     frames: u64,
 }
 
 impl SpectrumAverager {
-    fn new(sample_rate_hz: f64, fft_size: usize) -> Result<Self, String> {
+    pub(crate) fn new(sample_rate_hz: f64, fft_size: usize) -> Result<Self, String> {
         if !sample_rate_hz.is_finite() || sample_rate_hz <= 0.0 {
             return Err("sample rate must be positive and finite".into());
         }
@@ -48,12 +42,15 @@ impl SpectrumAverager {
         if window_energy <= 0.0 {
             return Err("FFT window has zero energy".into());
         }
+        let fft = FftPlanner::new().plan_fft_forward(fft_size);
+        let scratch = vec![Complex::default(); fft.get_inplace_scratch_len()];
         Ok(Self {
             sample_rate_hz,
             fft_size,
             window,
             window_energy,
-            fft: FftPlanner::new().plan_fft_forward(fft_size),
+            fft,
+            scratch,
             frame: Vec::with_capacity(fft_size),
             work: vec![Complex::default(); fft_size],
             power_sum: vec![0.0; fft_size],
@@ -61,36 +58,38 @@ impl SpectrumAverager {
         })
     }
 
-    fn push_all(&mut self, samples: impl IntoIterator<Item = Complex>) {
-        for sample in samples {
-            self.push(sample);
+    fn push_all(&mut self, mut samples: &[Complex]) {
+        if !self.frame.is_empty() {
+            let count = (self.fft_size - self.frame.len()).min(samples.len());
+            self.frame.extend_from_slice(&samples[..count]);
+            samples = &samples[count..];
+            if self.frame.len() == self.fft_size {
+                let mut frame = std::mem::take(&mut self.frame);
+                self.process_frame(&frame);
+                frame.clear();
+                self.frame = frame;
+            }
         }
+        let mut chunks = samples.chunks_exact(self.fft_size);
+        for frame in &mut chunks {
+            self.process_frame(frame);
+        }
+        self.frame.extend_from_slice(chunks.remainder());
     }
 
-    fn push(&mut self, sample: Complex) {
-        self.frame.push(sample);
-        if self.frame.len() != self.fft_size {
+    fn process_frame(&mut self, frame: &[Complex]) {
+        if frame.iter().all(|sample| *sample == Complex::default()) {
             return;
         }
-        if self
-            .frame
-            .iter()
-            .all(|sample| *sample == Complex::default())
-        {
-            self.frame.clear();
-            return;
-        }
-        for ((destination, source), window) in
-            self.work.iter_mut().zip(&self.frame).zip(&self.window)
-        {
+        for ((destination, source), window) in self.work.iter_mut().zip(frame).zip(&self.window) {
             *destination = *source * *window;
         }
-        self.fft.process(&mut self.work);
+        self.fft
+            .process_with_scratch(&mut self.work, &mut self.scratch);
         for (sum, bin) in self.power_sum.iter_mut().zip(&self.work) {
             *sum += f64::from(bin.norm_sqr());
         }
         self.frames += 1;
-        self.frame.clear();
     }
 
     fn finish(&mut self) -> Option<Vec<f64>> {
@@ -184,7 +183,7 @@ struct RunSummary {
 }
 
 impl RunSummary {
-    fn new(config: &WorkerConfig) -> Self {
+    pub(crate) fn new(config: &WorkerConfig) -> Self {
         let mut bins = Vec::new();
         let mut band_bins = Vec::with_capacity(config.bands.len());
         for band in &config.bands {
@@ -226,6 +225,7 @@ impl RunSummary {
         }
     }
 
+    #[cfg(test)]
     fn snapshot(&self, completed_sweeps: u64) -> SurveySummary {
         SurveySummary {
             completed_sweeps,
@@ -261,7 +261,8 @@ struct ActiveDwell {
     lo_offset_hz: f64,
 }
 
-struct SurveyWorker {
+pub(crate) struct SurveyWorker {
+    pub(crate) completed_sweeps: u64,
     config: WorkerConfig,
     averager: SpectrumAverager,
     active: Option<ActiveDwell>,
@@ -270,7 +271,7 @@ struct SurveyWorker {
 }
 
 impl SurveyWorker {
-    fn new(config: WorkerConfig) -> Result<Self, String> {
+    pub(crate) fn new(config: WorkerConfig) -> Result<Self, String> {
         if config.bands.is_empty() {
             return Err("survey has no tuner bands".into());
         }
@@ -280,6 +281,7 @@ impl SurveyWorker {
             .take(config.bands.len())
             .collect();
         Ok(Self {
+            completed_sweeps: 0,
             config,
             averager,
             active: None,
@@ -288,7 +290,11 @@ impl SurveyWorker {
         })
     }
 
-    fn begin_dwell(&mut self, band_index: usize, lo_offset_hz: f64) -> Result<(), String> {
+    pub(crate) fn begin_dwell(
+        &mut self,
+        band_index: usize,
+        lo_offset_hz: f64,
+    ) -> Result<(), String> {
         if self.active.is_some() {
             return Err("cannot begin a dwell while another dwell is active".into());
         }
@@ -311,7 +317,7 @@ impl SurveyWorker {
         Ok(())
     }
 
-    fn push_samples(&mut self, samples: Vec<Complex>) -> Result<(), String> {
+    pub(crate) fn push_samples(&mut self, samples: &[Complex]) -> Result<(), String> {
         if self.active.is_none() {
             return Err("received samples without an active dwell".into());
         }
@@ -319,12 +325,12 @@ impl SurveyWorker {
         Ok(())
     }
 
-    fn cancel_dwell(&mut self) {
+    pub(crate) fn cancel_dwell(&mut self) {
         self.active = None;
         self.averager.reset();
     }
 
-    fn end_dwell(&mut self) -> Result<(), String> {
+    pub(crate) fn end_dwell(&mut self) -> Result<(), String> {
         let active = self
             .active
             .take()
@@ -342,7 +348,7 @@ impl SurveyWorker {
         Ok(())
     }
 
-    fn commit_sweep(&mut self, sweep_index: u64) -> Result<SurveySummary, String> {
+    pub(crate) fn commit_sweep(&mut self, sweep_index: u64) -> Result<(), String> {
         if self.active.is_some() {
             return Err("cannot commit a sweep while a dwell is active".into());
         }
@@ -355,94 +361,84 @@ impl SurveyWorker {
                 &measurement.take().expect("all staged measurements checked"),
             );
         }
-        Ok(self.summary.snapshot(sweep_index + 1))
+        self.completed_sweeps = sweep_index + 1;
+        Ok(())
     }
-}
-
-async fn worker_msg(message: MainToWorker) -> Result<(), String> {
-    match message {
-        MainToWorker::Start(config) => {
-            info!(
-                "Starting survey processor: {} bands at {} S/s, FFT {}",
-                config.bands.len(),
-                config.sample_rate_hz,
-                config.fft_size
-            );
-            let state = SurveyWorker::new(config)?;
-            STATE.with(|slot| *slot.borrow_mut() = Some(state));
-        }
-        MainToWorker::ApplicationSpecific(command) => {
-            let summary = STATE.with(|slot| {
-                let mut slot = slot.borrow_mut();
-                let state = slot
-                    .as_mut()
-                    .ok_or_else(|| "survey processor has not been started".to_string())?;
-                match command {
-                    SurveyCommand::BeginDwell {
-                        band_index,
-                        lo_offset_hz,
-                    } => {
-                        state.begin_dwell(band_index, lo_offset_hz)?;
-                        Ok(None)
-                    }
-                    SurveyCommand::CancelDwell => {
-                        state.cancel_dwell();
-                        Ok(None)
-                    }
-                    SurveyCommand::EndDwell => {
-                        state.end_dwell()?;
-                        Ok(None)
-                    }
-                    SurveyCommand::CommitSweep { sweep_index } => {
-                        state.commit_sweep(sweep_index).map(Some)
-                    }
-                }
-            })?;
-            if let Some(summary) = summary {
-                rustradio_ui::worker::send_message(WorkerToMain::ApplicationSpecific(
-                    SurveyEvent::SweepComplete(summary),
-                ))
-                .await
-                .map_err(|error| error.to_string())?;
-            }
-        }
-        MainToWorker::Complexes(name, streams) if name == SAMPLE_STREAM => {
-            STATE.with(|slot| -> Result<(), String> {
-                let mut slot = slot.borrow_mut();
-                let state = slot
-                    .as_mut()
-                    .ok_or_else(|| "survey processor has not been started".to_string())?;
-                for stream in streams {
-                    state.push_samples(stream.data)?;
-                }
-                Ok(())
-            })?;
-        }
-        other => return Err(format!("unexpected worker message: {other:?}")),
-    }
-    Ok(())
-}
-
-fn ready(receiver: Receiver<MainToWorker>) {
-    spawn_local(async move {
-        rustradio_ui::worker::send_message(WorkerToMain::Ready(AppEmpty {}))
-            .await
-            .expect("failed to send ready message");
-        while let Ok(message) = receiver.recv().await {
-            trace!("Worker received {message:?}");
-            if let Err(reason) = worker_msg(message).await {
-                error!("Survey worker failed: {reason}");
-                let _ = rustradio_ui::worker::send_message(WorkerToMain::ApplicationSpecific(
-                    SurveyEvent::Failed(reason),
-                ))
-                .await;
-            }
-        }
-    });
 }
 
 pub(crate) async fn setup() -> Result<(), JsValue> {
-    rustradio_ui::worker::setup::<crate::MainApplication, crate::WorkerApplication, _>(ready).await
+    rustradio_ui::worker::setup::<crate::MainApplication, crate::WorkerApplication, _>(
+        crate::acquisition::ready,
+    )
+    .await
+}
+
+impl SurveyWorker {
+    pub(crate) fn points(&self) -> impl Iterator<Item = SummaryPoint> + '_ {
+        self.summary
+            .bins
+            .iter()
+            .filter(|bin| bin.count() > 0)
+            .map(|bin| SummaryPoint {
+                frequency_hz: bin.frequency_hz,
+                average_power: bin.mean(),
+                maximum_power: bin.maximum(),
+                observations: bin.count(),
+            })
+    }
+
+    pub(crate) fn plot(&self, widths: [usize; 2]) -> PlotData {
+        let first = self.summary.bins.iter().find(|bin| bin.count() > 0);
+        let last = self.summary.bins.iter().rfind(|bin| bin.count() > 0);
+        let range = first
+            .zip(last)
+            .map_or((0.0, 1.0), |(a, b)| (a.frequency_hz, b.frequency_hz));
+        let make = |count: usize| XyEnvelope {
+            x_range: range,
+            series: [("Average", "#1558d6"), ("Maximum", "#e02b2b")]
+                .into_iter()
+                .map(|(label, color)| XyEnvelopeSeries {
+                    label: label.into(),
+                    color: color.into(),
+                    buckets: vec![None; count.clamp(1, 16384)],
+                })
+                .collect(),
+        };
+        let mut db = make(widths[0]);
+        let mut linear = make(widths[1]);
+        let mut bins = 0;
+        for point in self.points() {
+            bins += 1;
+            for envelope in [&mut db, &mut linear] {
+                let width = (range.1 - range.0).max(f64::EPSILON);
+                let count = envelope.series[0].buckets.len();
+                let index = (((point.frequency_hz - range.0) / width * count as f64) as usize)
+                    .min(count - 1);
+                for (series, value) in envelope
+                    .series
+                    .iter_mut()
+                    .zip([point.average_power, point.maximum_power])
+                {
+                    series.buckets[index] = Some(match series.buckets[index] {
+                        None => (value, value),
+                        Some((lo, hi)) => (lo.min(value), hi.max(value)),
+                    });
+                }
+            }
+        }
+        for series in &mut db.series {
+            for (lo, hi) in series.buckets.iter_mut().flatten() {
+                *lo = linear_to_db(*lo);
+                *hi = linear_to_db(*hi);
+            }
+        }
+        PlotData {
+            completed_sweeps: self.completed_sweeps,
+            bins,
+            db,
+            linear,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -466,8 +462,83 @@ mod tests {
     #[test]
     fn zero_frames_are_not_measurements() {
         let mut averager = SpectrumAverager::new(4.0, 4).unwrap();
-        averager.push_all(vec![Complex::default(); 4]);
+        averager.push_all(&[Complex::default(); 4]);
         assert!(averager.finish().is_none());
+    }
+
+    #[test]
+    fn chunked_averaging_matches_direct_dft() {
+        let n = 8;
+        let mut input: Vec<_> = (0..n * 2)
+            .map(|i| Complex::new((i as f32 * 0.7).sin(), (i as f32 * 0.3).cos()))
+            .collect();
+        input.extend(vec![Complex::default(); n]);
+        input.extend([Complex::new(100.0, 100.0); 3]); // incomplete tail is discarded
+        let mut averager = SpectrumAverager::new(32.0, n).unwrap();
+        let mut expected = vec![0.0; n];
+        for frame in input[..n * 2].chunks_exact(n) {
+            for (k, power) in expected.iter_mut().enumerate() {
+                let mut sum = num_complex_reference(frame, &averager.window, k);
+                sum /= 32.0 * averager.window_energy * 2.0;
+                *power += sum;
+            }
+        }
+        for chunk in input.chunks(3) {
+            averager.push_all(chunk);
+        }
+        let result = averager.finish().unwrap();
+        for (actual, expected) in result.into_iter().zip(expected) {
+            assert!((actual - expected).abs() < 1e-6 * expected.abs().max(1.0));
+        }
+        assert!(averager.finish().is_none());
+    }
+
+    fn num_complex_reference(frame: &[Complex], window: &[f32], k: usize) -> f64 {
+        let (mut re, mut im) = (0.0, 0.0);
+        for (j, (sample, w)) in frame.iter().zip(window).enumerate() {
+            let phase = -2.0 * std::f64::consts::PI * k as f64 * j as f64 / frame.len() as f64;
+            let a = f64::from(sample.re * w);
+            let b = f64::from(sample.im * w);
+            re += a * phase.cos() - b * phase.sin();
+            im += a * phase.sin() + b * phase.cos();
+        }
+        re * re + im * im
+    }
+
+    #[test]
+    fn display_envelope_preserves_peaks_and_uses_bounded_columns() {
+        let mut worker = SurveyWorker::new(test_config()).unwrap();
+        worker.summary.add(
+            0,
+            &Measurement {
+                lo_offset_hz: 1.0,
+                psd: vec![1.0, 1000.0, 2.0, 3.0],
+            },
+        );
+        worker.completed_sweeps = 1;
+        let plot = worker.plot([2, 3]);
+        assert_eq!(plot.bins, 4);
+        assert_eq!(plot.db.series[0].buckets.len(), 2);
+        assert_eq!(plot.linear.series[0].buckets.len(), 3);
+        assert_eq!(
+            plot.linear.series[1]
+                .buckets
+                .iter()
+                .flatten()
+                .map(|v| v.1)
+                .fold(0.0, f64::max),
+            1000.0
+        );
+        assert_eq!(
+            plot.db.series[1]
+                .buckets
+                .iter()
+                .flatten()
+                .map(|v| v.1)
+                .fold(0.0, f64::max),
+            30.0
+        );
+        assert_eq!(worker.points().count(), 4);
     }
 
     #[test]

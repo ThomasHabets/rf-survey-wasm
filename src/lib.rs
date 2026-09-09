@@ -2,8 +2,10 @@ use log::info;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
+mod acquisition;
 mod mainthread;
 mod model;
+mod settings;
 mod worker;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -11,7 +13,7 @@ pub(crate) struct MainApplication;
 
 impl rustradio_ui::ApplicationSpecific for MainApplication {
     type App = SurveyCommand;
-    type Start = model::WorkerConfig;
+    type Start = (model::DeviceKey, settings::RequestedSettings, [usize; 2]);
     type End = rustradio_ui::AppEmpty;
     type Ready = rustradio_ui::AppEmpty;
 }
@@ -28,20 +30,19 @@ impl rustradio_ui::ApplicationSpecific for WorkerApplication {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) enum SurveyCommand {
-    BeginDwell {
-        band_index: usize,
-        lo_offset_hz: f64,
-    },
-    CancelDwell,
-    EndDwell,
-    CommitSweep {
-        sweep_index: u64,
-    },
+    Stop,
+    Viewport([usize; 2]),
+    Export,
+    Rendered(u64),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) enum SurveyEvent {
-    SweepComplete(model::SurveySummary),
+    Plot(model::PlotData),
+    Progress { text: String, retrying: bool },
+    Finished,
+    ExportChunk(Vec<u8>),
+    ExportComplete,
     Failed(String),
 }
 

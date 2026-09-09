@@ -86,6 +86,22 @@ pub(crate) struct SummaryPoint {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct PlotData {
+    pub completed_sweeps: u64,
+    pub bins: usize,
+    pub db: rustradio_ui::mainthread::xy_sink::XyEnvelope,
+    pub linear: rustradio_ui::mainthread::xy_sink::XyEnvelope,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct DeviceKey {
+    pub vendor_id: u16,
+    pub product_id: u16,
+    pub serial: Option<String>,
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct SurveySummary {
     pub completed_sweeps: u64,
     pub points: Vec<SummaryPoint>,

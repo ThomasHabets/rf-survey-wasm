@@ -14,10 +14,10 @@ futures-timer = { version = "3.0", features = ["wasm-bindgen"] }
 js-sys = "0.3.102"
 log = "0.4.33"
 rustfft = { version = "6.4.1", features = ["wasm_simd"] }
-rustradio = { version = "0.18.2", features = ["wasm", "fast-math", "simd"] }
-rustradio-ui = "0.1.23"
+rustradio = { version = "0.18.3", features = ["wasm", "fast-math", "simd"] }
+rustradio-ui = "0.1.24"
 serde = { version = "1.0.228", features = ["derive"] }
-uhd-pure = { version = "0.1.4", features = ["wasm"] }
+uhd-pure = { version = "0.1.5", features = ["wasm"] }
 wasm-bindgen = "0.2.125"
 wasm-bindgen-futures = "0.4.75"
 web-sys = { version = "0.3.102", features = [
@@ -41,3 +41,11 @@ crate-type = ["cdylib", "rlib"]
 
 [package.metadata.wasm-pack.profile.profiling]
 wasm-opt = ["-O", "-g"]
+
+# Temporary development overrides for the coordinated performance APIs. Keep
+# these dependencies in their sibling repositories; remove this section after
+# publishing the versions required above.
+[patch.crates-io]
+#rustradio = { path = "../rustradio" }
+#rustradio-ui = { path = "../rustradio/rustradio-ui" }
+#uhd-pure = { path = "../uhd-pure" }
