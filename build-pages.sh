@@ -3,6 +3,7 @@ set -euo pipefail
 
 web_dir="web"
 output_dir="${1:-dist}"
+git_version="$(git rev-parse --short HEAD)"
 ui_manifest="$(cargo metadata --format-version=1 | jq -r '.packages[] | select(.name=="rustradio-ui") | .manifest_path' | head -n1)"
 ui_dir="$(dirname "$ui_manifest")"
 ui_assets="$ui_dir/assets"
@@ -29,11 +30,11 @@ site_dir="$temporary_dir/site"
 
 wasm-pack build --target web --release -d "$site_dir"
 cp \
-  "$web_dir/index.html" \
   "$web_dir/wasm-mod.js" \
   "$web_dir/coi-serviceworker.js" \
   "$web_dir/.nojekyll" \
   "$site_dir/"
+sed "s/@GIT_VERSION@/$git_version/g" "$web_dir/index.html" > "$site_dir/index.html"
 cp "$firmware" "$fpga" "$site_dir/"
 cp "$ui_assets/bootstrap.js" "$site_dir/rustradio-ui-bootstrap.js"
 cat "$ui_assets/rustradio.css" "$web_dir/style.css" > "$site_dir/style.css"
