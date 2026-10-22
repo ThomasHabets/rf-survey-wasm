@@ -32,6 +32,7 @@ wasm-pack build --target web --release -d "$site_dir"
 cp \
   "$web_dir/wasm-mod.js" \
   "$web_dir/coi-serviceworker.js" \
+  "$web_dir/favicon.ico" \
   "$web_dir/.nojekyll" \
   "$site_dir/"
 sed "s/@GIT_VERSION@/$git_version/g" "$web_dir/index.html" > "$site_dir/index.html"

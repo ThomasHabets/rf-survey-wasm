@@ -26,6 +26,7 @@ wasm-pack build --target web -d "$temporary_dir/$prefix" "--$profile"
 cp \
   "$web_dir/wasm-mod.js" \
   "$web_dir/coi-serviceworker.js" \
+  "$web_dir/favicon.ico" \
   "$temporary_dir/$prefix/"
 sed "s/@GIT_VERSION@/$git_version/g" "$web_dir/index.html" > "$temporary_dir/$prefix/index.html"
 cp "serve.py" "$temporary_dir/$prefix/"
