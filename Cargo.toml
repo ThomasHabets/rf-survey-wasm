@@ -15,7 +15,7 @@ js-sys = "0.3.102"
 log = "0.4.33"
 rustfft = { version = "6.4.1", features = ["wasm_simd"] }
 rustradio = { version = "0.18.4", features = ["wasm", "fast-math", "simd"] }
-rustradio-ui = "0.1.24"
+rustradio-ui = "0.1.25"
 serde = { version = "1.0.228", features = ["derive"] }
 uhd-pure = { version = "0.1.5", features = ["wasm"] }
 wasm-bindgen = "0.2.125"
